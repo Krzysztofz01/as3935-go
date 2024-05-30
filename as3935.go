@@ -43,6 +43,65 @@ const (
 	Outdoor AnalogFrontEnd = 0x1C
 )
 
+type NoiseFloorLevel uint8
+
+const (
+	Outdoor390MicroVrms  NoiseFloorLevel = 0x00
+	Outdoor630MicroVrms  NoiseFloorLevel = 0x10
+	Outdoor860MicroVrms  NoiseFloorLevel = 0x20
+	Outdoor1100MicroVrms NoiseFloorLevel = 0x30
+	Outdoor1140MicroVrms NoiseFloorLevel = 0x40
+	Outdoor1570MicroVrms NoiseFloorLevel = 0x50
+	Outdoor1800MicroVrms NoiseFloorLevel = 0x60
+	Outdoor2000MicroVrms NoiseFloorLevel = 0x70
+)
+
+const (
+	Indoor28MicroVrms  NoiseFloorLevel = 0x00
+	Indoor45MicroVrms  NoiseFloorLevel = 0x10
+	Indoor62MicroVrms  NoiseFloorLevel = 0x20
+	Indoor78MicroVrms  NoiseFloorLevel = 0x30
+	Indoor95MicroVrms  NoiseFloorLevel = 0x40
+	Indoor112MicroVrms NoiseFloorLevel = 0x50
+	Indoor130MicroVrms NoiseFloorLevel = 0x60
+	Indoor146MicroVrms NoiseFloorLevel = 0x70
+)
+
+type WatchdogThreshold uint8
+
+const (
+	WDTH0  WatchdogThreshold = 0x00
+	WDTH1  WatchdogThreshold = 0x01
+	WDTH2  WatchdogThreshold = 0x02
+	WDTH3  WatchdogThreshold = 0x03
+	WDTH4  WatchdogThreshold = 0x04
+	WDTH5  WatchdogThreshold = 0x05
+	WDTH6  WatchdogThreshold = 0x06
+	WDTH7  WatchdogThreshold = 0x07
+	WDTH8  WatchdogThreshold = 0x08
+	WDTH9  WatchdogThreshold = 0x09
+	WDTH10 WatchdogThreshold = 0x0A
+)
+
+type SpikeRejection uint8
+
+const (
+	SREJ0  SpikeRejection = 0x00
+	SREJ1  SpikeRejection = 0x01
+	SREJ2  SpikeRejection = 0x02
+	SREJ3  SpikeRejection = 0x03
+	SREJ4  SpikeRejection = 0x04
+	SREJ5  SpikeRejection = 0x05
+	SREJ6  SpikeRejection = 0x06
+	SREJ7  SpikeRejection = 0x07
+	SREJ8  SpikeRejection = 0x08
+	SREJ9  SpikeRejection = 0x09
+	SREJ10 SpikeRejection = 0x0A
+	SREJ11 SpikeRejection = 0x0B
+)
+
+// The documentation says about 2ms delays after certain operations. The library takes
+// three additional ms to be extra sure about the applied changes.
 const delayDuration = time.Duration(5) * time.Millisecond
 
 type Module interface {
@@ -51,8 +110,6 @@ type Module interface {
 
 	// Close the communication over i2c with the module.
 	Close() error
-
-	// ManualCalibration(capacitance, location, disturber uint8) error
 
 	// Reset the state of the module via PRESET_DEFAULT direct command register.
 	InitializeDefaults() error
@@ -85,17 +142,23 @@ type Module interface {
 	// Dump the value of registers from 0x00 to 0x08.
 	DumpRegisters() ([9]uint8, error)
 
-	// GetNoiseFloorLevel(level int) error
+	// Set the noise floor level which is compared to a reference threshold (causing interrupts) via the NF_LEV register.
+	GetNoiseFloorLevel() (uint8, error)
 
-	// SetNoiseFloorLevel() (int, error)
+	// Set the noise floor level which is comapred to a reference threshold (causing interrupts) via the NF_LEV register.
+	SetNoiseFloorLevel(level NoiseFloorLevel) error
 
-	// GetWatchdogThreshold(threshold int) error
+	// Get the watchdog threshold value which controls the behavior of disturbers via the WDTH register.
+	GetWatchdogThreshold() (uint8, error)
 
-	// SetWatchdogThreshold() (int, error)
+	// Set the watchdog threshold value which controls the behavior of disturbers via the WDTH register.
+	SetWatchdogThreshold(threshold WatchdogThreshold) error
 
-	// GetSpikeRejection() (int, error)
+	// Get the spike rejection which controls the behavior of disturbers via the SREJ register.
+	GetSpikeRejection() (uint8, error)
 
-	// SetSpikeRejection(rejection int) error
+	// Set the spike rejection which controls the behavior of disturbers via the SREJ register.
+	SetSpikeRejection(rejection SpikeRejection) error
 
 	// Set the power up or down via the PWD register.
 	PowerSwitch(power bool) error
@@ -125,6 +188,109 @@ type module struct {
 	BufferRead  []uint8
 	BufferWrite []uint8
 	mu          sync.Mutex
+}
+
+func (m *module) GetSpikeRejection() (uint8, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	register, err := m.RegRead(0x02)
+	if err != nil {
+		return 0x00, fmt.Errorf("as3935: failed to get the spike rejection register: %w", err)
+	}
+
+	register = register & 0x0F
+	if register < 0x00 || register > 0x0B {
+		return 0x00, fmt.Errorf("as3935: the spike rejection had a corrupted value")
+	}
+
+	return register, nil
+}
+
+func (m *module) SetSpikeRejection(rejection SpikeRejection) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	rejectionValue := uint8(rejection)
+	if rejectionValue < 0x00 || rejectionValue > 0x0B {
+		return fmt.Errorf("as3935: the specified spike rejection is out of range")
+	}
+
+	if err := m.RegWriteMasked(0x02, rejectionValue, 0x0F); err != nil {
+		return fmt.Errorf("as3935: failed to set the spike rejection register: %w", err)
+	}
+
+	return nil
+}
+
+func (m *module) SetWatchdogThreshold(threshold WatchdogThreshold) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	thresholdValue := uint8(threshold)
+	if thresholdValue < 0x00 || thresholdValue > 0x0A {
+		return fmt.Errorf("as3935: the provided watchdog threshold value is out of range")
+	}
+
+	if err := m.RegWriteMasked(0x01, thresholdValue, 0x0F); err != nil {
+		return fmt.Errorf("as3935: faield to set the watchdog threshold register: %w", err)
+	}
+
+	return nil
+}
+
+func (m *module) GetWatchdogThreshold() (uint8, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	register, err := m.RegRead(0x01)
+	if err != nil {
+		return 0x00, fmt.Errorf("as3935: failed to read the watchdog threshold register: %w", err)
+	}
+
+	register = register & 0x0F
+	if register < 0x00 || register > 0x0A {
+		return 0x0, fmt.Errorf("as3935: the watchdog threshold value had a corrupted value")
+	}
+
+	return register, nil
+}
+
+func (m *module) GetNoiseFloorLevel() (uint8, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	register, err := m.RegRead(0x01)
+	if err != nil {
+		return 0x00, fmt.Errorf("as3935: failed to read the noise floor level reigster: %w", err)
+	}
+
+	register = (register & 0x70) >> 4
+
+	switch NoiseFloorLevel(register) {
+	case 0x00, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70:
+	default:
+		return 0x00, fmt.Errorf("as3935: the provided noise floor level had a corrupted value")
+	}
+
+	return register, nil
+}
+
+func (m *module) SetNoiseFloorLevel(level NoiseFloorLevel) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	switch level {
+	case 0x00, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70:
+	default:
+		return fmt.Errorf("as3935: the provided noise floor level value is out of range")
+	}
+
+	if err := m.RegWriteMasked(0x01, uint8(level), 0x70); err != nil {
+		return fmt.Errorf("as3935: failed to set the noise floor level to the register: %w", err)
+	}
+
+	return nil
 }
 
 func (m *module) PowerSwitch(power bool) error {
