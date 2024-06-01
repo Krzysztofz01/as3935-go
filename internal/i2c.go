@@ -45,6 +45,7 @@ func NewI2cDevice(device string, address int, debugOut io.Writer) (I2c, error) {
 		Address:     address,
 		BufferRead:  make([]uint8, ReadBufferSize),
 		BufferWrite: make([]uint8, WriteBufferSize),
+		DebugOut:    debugOut,
 	}, nil
 }
 
