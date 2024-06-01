@@ -2,6 +2,7 @@ package internal
 
 import (
 	"fmt"
+	"io"
 
 	"golang.org/x/exp/io/i2c"
 )
@@ -23,8 +24,13 @@ type I2c interface {
 	RegWriteMasked(offset, value, mask uint8) error
 }
 
+const (
+	ReadBufferSize  uint8 = 9
+	WriteBufferSize uint8 = 1
+)
+
 // Create a new I2C device wrapper instance
-func NewI2cDevice(device string, address int) (I2c, error) {
+func NewI2cDevice(device string, address int, debugOut io.Writer) (I2c, error) {
 	if len(device) == 0 {
 		return nil, fmt.Errorf("as3935: invalid i2c device specified")
 	}
@@ -37,8 +43,8 @@ func NewI2cDevice(device string, address int) (I2c, error) {
 		DeviceFs:    device,
 		Device:      nil,
 		Address:     address,
-		BufferRead:  make([]uint8, 1),
-		BufferWrite: make([]uint8, 1),
+		BufferRead:  make([]uint8, ReadBufferSize),
+		BufferWrite: make([]uint8, WriteBufferSize),
 	}, nil
 }
 
@@ -48,6 +54,7 @@ type i2cWrapper struct {
 	Address     int
 	BufferRead  []uint8
 	BufferWrite []uint8
+	DebugOut    io.Writer
 }
 
 func (i *i2cWrapper) Close() error {
@@ -85,20 +92,78 @@ func (i *i2cWrapper) Open() error {
 }
 
 func (i *i2cWrapper) RegRead(offset uint8) (uint8, error) {
-	err := i.Device.ReadReg(offset, i.BufferRead)
-	if err != nil {
+	// TODO: The function is performing a workaround for the broken I2C reading in the AS3935 IC
+
+	if offset >= ReadBufferSize {
+		return 0x00, fmt.Errorf("as3935: the offset is out of the module register range")
+	}
+
+	if err := i.Device.ReadReg(0x00, i.BufferRead); err != nil {
 		return 0x00, fmt.Errorf("as3935: failed to read the value at the given offset via i2c: %w", err)
 	}
 
-	return i.BufferRead[0], nil
+	// NOTE: Debug logging logic
+	if i.DebugOut != nil {
+		fmt.Fprintf(i.DebugOut, "[ Read ] Offset: 0x%02x:\n", offset)
+		for regOffset, regValue := range i.BufferRead {
+			if uint8(regOffset) == offset {
+				fmt.Fprintf(i.DebugOut, "[%08b]", regValue)
+			} else {
+				fmt.Fprintf(i.DebugOut, " %08b ", regValue)
+			}
+
+			fmt.Fprintf(i.DebugOut, " ")
+		}
+		fmt.Fprintf(i.DebugOut, "\n")
+	}
+
+	return i.BufferRead[offset], nil
 }
 
 func (i *i2cWrapper) RegWrite(offset, value uint8) error {
 	i.BufferWrite[0] = value
 
+	// NOTE: Debug logging logic. Load registers into buffer to compare them
+	if i.DebugOut != nil {
+		if _, err := i.RegRead(offset); err != nil {
+			return fmt.Errorf("as3935: failed to read the value at the given offset via i2c for logging purposes: %w", err)
+		}
+	}
+
 	err := i.Device.WriteReg(offset, i.BufferWrite)
 	if err != nil {
 		return fmt.Errorf("as3935: failed to write the value at the given offset via i2c: %w", err)
+	}
+
+	if i.DebugOut != nil {
+		fmt.Fprintf(i.DebugOut, "[ Write ] Value: 0x%02x Offset: 0x%02x:\n", value, offset)
+		for regOffset, regValue := range i.BufferRead {
+			if uint8(regOffset) == offset {
+				fmt.Fprintf(i.DebugOut, "[%08b]", regValue)
+			} else {
+				fmt.Fprintf(i.DebugOut, " %08b ", regValue)
+			}
+
+			fmt.Fprintf(i.DebugOut, " ")
+		}
+
+		fmt.Fprintf(i.DebugOut, "\n")
+
+		if _, err := i.RegRead(offset); err != nil {
+			return fmt.Errorf("as3935: failed to read the value at the given offset via i2c for logging purposes: %w", err)
+		}
+
+		for regOffset, regValue := range i.BufferRead {
+			if uint8(regOffset) == offset {
+				fmt.Fprintf(i.DebugOut, "[%08b]", regValue)
+			} else {
+				fmt.Fprintf(i.DebugOut, " %08b ", regValue)
+			}
+
+			fmt.Fprintf(i.DebugOut, " ")
+		}
+
+		fmt.Fprintf(i.DebugOut, "\n")
 	}
 
 	return nil
@@ -114,6 +179,37 @@ func (i *i2cWrapper) RegWriteMasked(offset, value, mask uint8) error {
 
 	if err := i.RegWrite(offset, register); err != nil {
 		return fmt.Errorf("as3935: failed to write the register for masked writing: %w", err)
+	}
+
+	if i.DebugOut != nil {
+		fmt.Fprintf(i.DebugOut, "[ Write Masked ] Value: 0x%02x Mask: 0x%02x Offset: 0x%02x:\n", value, mask, offset)
+		for regOffset, regValue := range i.BufferRead {
+			if uint8(regOffset) == offset {
+				fmt.Fprintf(i.DebugOut, "[%08b]", regValue)
+			} else {
+				fmt.Fprintf(i.DebugOut, " %08b ", regValue)
+			}
+
+			fmt.Fprintf(i.DebugOut, " ")
+		}
+
+		fmt.Fprintf(i.DebugOut, "\n")
+
+		if _, err := i.RegRead(offset); err != nil {
+			return fmt.Errorf("as3935: failed to read the value at the given offset via i2c for logging purposes: %w", err)
+		}
+
+		for regOffset, regValue := range i.BufferRead {
+			if uint8(regOffset) == offset {
+				fmt.Fprintf(i.DebugOut, "[%08b]", regValue)
+			} else {
+				fmt.Fprintf(i.DebugOut, " %08b ", regValue)
+			}
+
+			fmt.Fprintf(i.DebugOut, " ")
+		}
+
+		fmt.Fprintf(i.DebugOut, "\n")
 	}
 
 	return nil

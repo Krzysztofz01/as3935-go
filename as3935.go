@@ -2,6 +2,7 @@ package as3935go
 
 import (
 	"fmt"
+	"io"
 	"math"
 	"sync"
 	"time"
@@ -167,7 +168,22 @@ type Module interface {
 // Create a instance of the AS3935 module from the provided device path and I2C address.
 // All module functions are locking what allows to use the module in multiple goroutines.
 func NewModule(device string, address int) (Module, error) {
-	i2c, err := internal.NewI2cDevice(device, address)
+	i2c, err := internal.NewI2cDevice(device, address, nil)
+	if err != nil {
+		return nil, fmt.Errorf("as3935: failed to create the i2c device representation: %w", err)
+	}
+
+	return &module{
+		i2c: i2c,
+		mu:  sync.Mutex{},
+	}, nil
+}
+
+// Create a instance of the AS3935 module from the provided device path and I2C address.
+// All module functions are locking what allows to use the module in multiple goroutines.
+// The I2C reads and writes are logging the state of the registers into teh debougOut pipe.
+func NewModuleDebug(device string, address int, debugOut io.Writer) (Module, error) {
+	i2c, err := internal.NewI2cDevice(device, address, debugOut)
 	if err != nil {
 		return nil, fmt.Errorf("as3935: failed to create the i2c device representation: %w", err)
 	}
